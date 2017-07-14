@@ -646,6 +646,12 @@ func (c *Client) SendHtml(chat Chat) (n int, err error) {
 		xmlEscape(chat.Remote), xmlEscape(chat.Type), xmlEscape(chat.Text), chat.Text)
 }
 
+// SendRaw sends RAW message, don't mess this up or you'll make the server sad.
+func (c *Client) SendRaw(chat Chat) (n int, err error) {
+	return fmt.Fprintf(c.conn, "<message to='%s' type='%s' xml:lang='en'>%s</message>",
+		xmlEscape(chat.Remote), xmlEscape(chat.Type), chat.Text)
+}
+
 // Roster asks for the chat roster.
 func (c *Client) Roster() error {
 	fmt.Fprintf(c.conn, "<iq from='%s' type='get' id='roster1'><query xmlns='jabber:iq:roster'/></iq>\n", xmlEscape(c.jid))

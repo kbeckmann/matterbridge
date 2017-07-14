@@ -12,6 +12,7 @@ import (
 	"strings"
 	"html"
 	"time"
+	"fmt"
 //	"encoding/xml"
 )
 
@@ -138,13 +139,15 @@ func (b *Bxmpp) Send(msg config.Message) error {
 	correctURLPrefix := "https://mattermost.xil.se/"
 	rawText = strings.Replace(rawText, borkedURLPrefix, correctURLPrefix, 1)
 
-	markdownBytes := blackfriday.MarkdownCommon([]byte(rawText))
+	//markdownBytes := blackfriday.MarkdownCommon([]byte(rawText))
+	markdownBytes := blackfriday.MarkdownBasic([]byte(rawText))
 	markdown := strings.TrimSpace(string(markdownBytes))
 	flog.Infof("MARKDOWN: [%s]", markdown)
 
 
 	if strings.HasPrefix(markdown, "<p>") && strings.HasSuffix(markdown, "</p>") {
 		flog.Infof("starts with <p>..")
+		flog.Infof("[%s] vs [%s]", html.UnescapeString(markdown[3:len(markdown)-4]), rawText)
 		
 		if html.UnescapeString(markdown[3:len(markdown)-4]) == rawText {
 			// No markdown in the text!
@@ -158,8 +161,10 @@ func (b *Bxmpp) Send(msg config.Message) error {
 	// HTML
 	sanitizedBytes := bluemonday.UGCPolicy().SanitizeBytes(markdownBytes)
 	sanitized := strings.TrimSpace(string(sanitizedBytes))
-	chat := xmpp.Chat{Type: "groupchat", Remote: msg.Channel + "@" + b.Config.Muc, Text: sanitized}
-	client.SendHtml(chat)
+	xmppHtml := fmt.Sprintf("<body>%s</body><html xmlns='http://jabber.org/protocol/xhtml-im'><body xmlns='http://www.w3.org/1999/xhtml'>%s</body></html>", rawText, sanitized)
+	//chat := xmpp.Chat{Type: "groupchat", Remote: msg.Channel + "@" + b.Config.Muc, Text: sanitized}
+	chat := xmpp.Chat{Type: "groupchat", Remote: msg.Channel + "@" + b.Config.Muc, Text: xmppHtml}
+	client.SendRaw(chat)
 	return nil
 }
 
