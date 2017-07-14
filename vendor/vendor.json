@@ -3,6 +3,12 @@
 	"ignore": "",
 	"package": [
 		{
+			"checksumSHA1": "2QQMfLWD8Likv0vwl+cUVzDd1qM=",
+			"path": "github.com/microcosm-cc/bluemonday",
+			"revision": "e79763773ab6222ca1d5a7cbd9d62d83c1f77081",
+			"revisionTime": "2016-12-02T14:38:24Z"
+		},
+		{
 			"checksumSHA1": "jmVbqJuDNQQTq2sFx8iTStKeAu4=",
 			"path": "github.com/russross/blackfriday",
 			"revision": "067529f716f4c3f5e37c8c95ddd59df1007290ae",
