@@ -163,7 +163,9 @@ func (b *Bmattermost) handleMatterClient(mchan chan *MMMessage) {
 			m.Channel = message.Channel
 			m.Text = message.Text
 			if message.Raw.Event == "post_edited" && !b.Config.EditDisable {
-				m.Text = message.Text + b.Config.EditSuffix
+				// XIL: Make simon happy
+				continue
+				// m.Text = message.Text + b.Config.EditSuffix
 			}
 			if len(message.Post.FileIds) > 0 {
 				for _, link := range b.mc.GetPublicLinks(message.Post.FileIds) {
@@ -182,7 +184,7 @@ func (b *Bmattermost) handleMatterHook(mchan chan *MMMessage) {
 		m := &MMMessage{}
 		m.UserID = message.UserID
 		m.Username = message.UserName
-		m.Text = message.Text
+		m.Text = message.Text + "LOL"
 		m.Channel = message.ChannelName
 		mchan <- m
 	}
