@@ -17,9 +17,9 @@ import (
 
 type Channel struct {
 	Name        string
-	XmppClients map[string]*xmpp.Client
 	Users       map[string]bool
-	UserToXmpp  map[string]string
+	MMToXmpp  map[string]string
+	XmppToMM map[string]string
 }
 
 type Bxmpp struct {
@@ -30,6 +30,7 @@ type Bxmpp struct {
 	Account string
 
 	// XIL
+	XmppClients map[string]*xmpp.Client
 	Channels map[string]*Channel
 }
 
@@ -46,6 +47,7 @@ func New(cfg config.Protocol, account string, c chan config.Message) *Bxmpp {
 	b.Config = &cfg
 	b.Account = account
 	b.Remote = c
+	b.XmppClients = make(map[string]*xmpp.Client)
 	b.Channels = make(map[string]*Channel)
 	flog.Infof("###################### Bxmpp.New()")
 	return b
@@ -72,9 +74,9 @@ func (b *Bxmpp) JoinChannel(channel string) error {
 	b.xc.JoinMUCNoHistory(channel+"@"+b.Config.Muc, b.Config.Nick)
 	b.Channels[channel] = &Channel{
 		Name: channel,
-		XmppClients: make(map[string]*xmpp.Client),
 		Users: make(map[string]bool),
-		UserToXmpp: make(map[string]string),
+		MMToXmpp: make(map[string]string),
+		XmppToMM: make(map[string]string),
 	}
 	return nil
 }
@@ -97,21 +99,28 @@ func (b *Bxmpp) Send(msg config.Message) error {
 	mmUser := msg.Username[1 : len(msg.Username)-2]
 	xmppUser := mmUser
 
-	if channel.UserToXmpp[mmUser] == "" {
-		// User hasn't been mapped out yet. Let's find a free username to map against:
-		if channel.XmppClients[xmppUser] == nil {
+	if client, ok = b.XmppClients[mmUser]; !ok {
+		// User doesn't have an xmpp client yet
+		if channel.MMToXmpp[mmUser] == "" {
+			// User hasn't been mapped out yet. Let's find a free username to map against:
 			for channel.Users[xmppUser] {
 				// there's someone in the xmpp muc with the same nick as in mm
 				xmppUser += "_mm"
 			}
+		
+			channel.MMToXmpp[mmUser] = xmppUser
+			channel.XmppToMM[xmppUser] = mmUser
+		} else {
+			xmppUser = channel.MMToXmpp[mmUser]
 		}
-		channel.UserToXmpp[mmUser] = xmppUser
 	} else {
-		xmppUser = channel.UserToXmpp[mmUser]
+		// Ensure that the MUC is joined
+		flog.Infof("BONUS JOIN!!! %s", msg.Channel)
+		client.JoinMUCNoHistory(msg.Channel+"@"+b.Config.Muc, xmppUser)
 	}
 
 	flog.Infof("1")
-	if client, ok = channel.XmppClients[xmppUser]; !ok {
+	if client, ok = b.XmppClients[mmUser]; !ok {
 		flog.Infof("2")
 		// Connect and join channel
 		tc := new(tls.Config)
@@ -138,11 +147,10 @@ func (b *Bxmpp) Send(msg config.Message) error {
 		flog.Infof("3")
 		client, err = options.NewClient()
 		if err != nil {
-			flog.Infof("OoOoops")
-			flog.Infof(err.Error())
+			flog.Errorf(err.Error())
 		}
 		flog.Infof("4")
-		channel.XmppClients[xmppUser] = client
+		b.XmppClients[mmUser] = client
 		flog.Infof("5")
 		client.JoinMUCNoHistory(msg.Channel+"@"+b.Config.Muc, xmppUser)
 		b.xmppKeepAlive(client)
@@ -264,7 +272,7 @@ func (b *Bxmpp) handleXmpp() error {
 				}
 				flog.Debugf("Current channel %#v", channel)
 
-				if nick != b.Config.Nick && channel.XmppClients[nick] == nil && v.Stamp == nodelay && v.Text != "" {
+				if nick != b.Config.Nick && channel.XmppToMM[nick] == "" && v.Stamp == nodelay && v.Text != "" {
 					flog.Debugf("Sending message from %s on %s to gateway", nick, b.Account)
 					b.Remote <- config.Message{Username: nick, Text: v.Text, Channel: channelName, Account: b.Account, UserID: v.Remote}
 				}
