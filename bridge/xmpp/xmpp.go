@@ -5,16 +5,22 @@ import (
 	"github.com/42wim/matterbridge/bridge/config"
 	log "github.com/Sirupsen/logrus"
 	"github.com/mattn/go-xmpp"
-	"github.com/russross/blackfriday"
 	"github.com/microcosm-cc/bluemonday"
+	"github.com/russross/blackfriday"
 
-
-	"strings"
-	"html"
-	"time"
 	"fmt"
-//	"encoding/xml"
+	"html"
+	"strings"
+	"time"
+	"errors"
 )
+
+type Channel struct {
+	Name        string
+	XmppClients map[string]*xmpp.Client
+	Users       map[string]bool
+	UserToXmpp  map[string]string
+}
 
 type Bxmpp struct {
 	xc      *xmpp.Client
@@ -24,16 +30,11 @@ type Bxmpp struct {
 	Account string
 
 	// XIL
-	xmppClients   map[string]*xmpp.Client
-	Channel string
-	Users map[string]bool
-	UserToXmpp map[string]string
+	Channels map[string]*Channel
 }
 
 var flog *log.Entry
 var protocol = "xmpp"
-
-
 
 func init() {
 	flog = log.WithFields(log.Fields{"module": protocol})
@@ -45,9 +46,8 @@ func New(cfg config.Protocol, account string, c chan config.Message) *Bxmpp {
 	b.Config = &cfg
 	b.Account = account
 	b.Remote = c
-	b.xmppClients = make(map[string]*xmpp.Client)
-	b.Users = make(map[string]bool)
-	b.UserToXmpp = make(map[string]string)
+	b.Channels = make(map[string]*Channel)
+	flog.Infof("###################### Bxmpp.New()")
 	return b
 }
 
@@ -70,32 +70,48 @@ func (b *Bxmpp) Disconnect() error {
 
 func (b *Bxmpp) JoinChannel(channel string) error {
 	b.xc.JoinMUCNoHistory(channel+"@"+b.Config.Muc, b.Config.Nick)
-	b.Channel = channel
+	b.Channels[channel] = &Channel{
+		Name: channel,
+		XmppClients: make(map[string]*xmpp.Client),
+		Users: make(map[string]bool),
+		UserToXmpp: make(map[string]string),
+	}
 	return nil
 }
 
 func (b *Bxmpp) Send(msg config.Message) error {
-	flog.Debugf("Receiving %#v", msg)
 	var client *xmpp.Client
 	var ok bool
-	mmUser := msg.Username[1:len(msg.Username)-2]
+	var channel *Channel
+
+	flog.Debugf("Receiving %#v", msg)
+
+	// If we haven't joined the channel, bail out!
+	if channel, ok = b.Channels[msg.Channel]; !ok {
+		flog.Errorf("Tried to send message but we aren't in the channel! [%s]", msg.Channel)
+		return errors.New("Got message from bad channel")
+	}
+	flog.Debugf("Current channel %#v", channel)
+		
+
+	mmUser := msg.Username[1 : len(msg.Username)-2]
 	xmppUser := mmUser
 
-	if b.UserToXmpp[mmUser] == "" {
+	if channel.UserToXmpp[mmUser] == "" {
 		// User hasn't been mapped out yet. Let's find a free username to map against:
-		if b.xmppClients[xmppUser] == nil {
-			for b.Users[xmppUser] {
+		if channel.XmppClients[xmppUser] == nil {
+			for channel.Users[xmppUser] {
 				// there's someone in the xmpp muc with the same nick as in mm
 				xmppUser += "_mm"
 			}
 		}
-		b.UserToXmpp[mmUser] = xmppUser
+		channel.UserToXmpp[mmUser] = xmppUser
 	} else {
-		xmppUser = b.UserToXmpp[mmUser]
+		xmppUser = channel.UserToXmpp[mmUser]
 	}
 
 	flog.Infof("1")
-	if client, ok = b.xmppClients[xmppUser]; !ok {
+	if client, ok = channel.XmppClients[xmppUser]; !ok {
 		flog.Infof("2")
 		// Connect and join channel
 		tc := new(tls.Config)
@@ -108,7 +124,7 @@ func (b *Bxmpp) Send(msg config.Message) error {
 			NoTLS:     true,
 			StartTLS:  true,
 			TLSConfig: tc,
-	
+
 			//StartTLS:      false,
 			Debug:                        true,
 			Session:                      true,
@@ -126,9 +142,9 @@ func (b *Bxmpp) Send(msg config.Message) error {
 			flog.Infof(err.Error())
 		}
 		flog.Infof("4")
-		b.xmppClients[xmppUser] = client
+		channel.XmppClients[xmppUser] = client
 		flog.Infof("5")
-		client.JoinMUCNoHistory(b.Channel+"@"+b.Config.Muc, xmppUser)
+		client.JoinMUCNoHistory(msg.Channel+"@"+b.Config.Muc, xmppUser)
 		b.xmppKeepAlive(client)
 	}
 	flog.Infof("6")
@@ -144,11 +160,10 @@ func (b *Bxmpp) Send(msg config.Message) error {
 	markdown := strings.TrimSpace(string(markdownBytes))
 	flog.Infof("MARKDOWN: [%s]", markdown)
 
-
 	if strings.HasPrefix(markdown, "<p>") && strings.HasSuffix(markdown, "</p>") {
 		flog.Infof("starts with <p>..")
 		flog.Infof("[%s] vs [%s]", html.UnescapeString(markdown[3:len(markdown)-4]), rawText)
-		
+
 		if html.UnescapeString(markdown[3:len(markdown)-4]) == rawText {
 			// No markdown in the text!
 			flog.Infof("No markdown! woop!")
@@ -157,7 +172,7 @@ func (b *Bxmpp) Send(msg config.Message) error {
 			return nil
 		}
 	}
-	
+
 	// HTML
 	sanitizedBytes := bluemonday.UGCPolicy().SanitizeBytes(markdownBytes)
 	sanitized := strings.TrimSpace(string(sanitizedBytes))
@@ -211,50 +226,69 @@ func (b *Bxmpp) xmppKeepAlive(client *xmpp.Client) chan bool {
 	return done
 }
 
+func parseChannelNick(s string) (string, string) {
+	var channelName, nick string
+	parts := strings.Split(s, "@")
+	if len(parts) >= 2 {
+		channelName = parts[0]
+	}
+	parts = strings.Split(parts[1], "/")
+	if len(parts) == 2 {
+		nick = parts[1]
+	}
+	return channelName, nick
+}
+
 func (b *Bxmpp) handleXmpp() error {
 	done := b.xmppKeepAlive(b.xc)
 	defer close(done)
 	nodelay := time.Time{}
 	for {
 		m, err := b.xc.Recv()
+		flog.Debugf("le woop! %#v %#v", m, err)
 		if err != nil {
 			return err
 		}
 		switch v := m.(type) {
 		case xmpp.Chat:
-			var channel, nick string
 			flog.Debugf("RECEIVE: %#v", v)
 			if v.Type == "groupchat" {
-				s := strings.Split(v.Remote, "@")
-				if len(s) >= 2 {
-					channel = s[0]
+				channelName, nick := parseChannelNick(v.Remote)
+
+				// If we haven't joined the channel, bail out!
+				var channel *Channel
+				var ok bool
+				if channel, ok = b.Channels[channelName]; !ok {
+					flog.Errorf("Got Message but we aren't in the channel! [%s]", channelName)
+					return errors.New("Got Message from bad channel")
 				}
-				s = strings.Split(s[1], "/")
-				if len(s) == 2 {
-					nick = s[1]
-				}
-				if nick != b.Config.Nick && b.xmppClients[nick] == nil && v.Stamp == nodelay && v.Text != "" {
+				flog.Debugf("Current channel %#v", channel)
+
+				if nick != b.Config.Nick && channel.XmppClients[nick] == nil && v.Stamp == nodelay && v.Text != "" {
 					flog.Debugf("Sending message from %s on %s to gateway", nick, b.Account)
-					b.Remote <- config.Message{Username: nick, Text: v.Text, Channel: channel, Account: b.Account, UserID: v.Remote}
+					b.Remote <- config.Message{Username: nick, Text: v.Text, Channel: channelName, Account: b.Account, UserID: v.Remote}
 				}
 			}
 		case xmpp.Presence:
 			flog.Debugf("presence!")
-			flog.Debugf("%v", v)
+			flog.Debugf("%#v", v)
 			flog.Debugf("--- %s, %s, %s, %s, %s---", v.From, v.To, v.Type, v.Show, v.Status)
 			status := true
 			if v.Type == "unavailable" {
 				status = false
 			}
-			var nick string
-			s := strings.Split(v.From, "@")
-			s = strings.Split(s[1], "/")
-			if len(s) == 2 {
-				nick = s[1]
+			channelName, nick := parseChannelNick(v.From)
+
+			// If we haven't joined the channel, bail out!
+			var channel *Channel
+			var ok bool
+			if channel, ok = b.Channels[channelName]; !ok {
+				flog.Errorf("Got Precense but we aren't in the channel! [%s]", channelName)
+				break
 			}
-			b.Users[nick] = status
-			flog.Debugf("Setting b.Users[%s]=%v", nick, status)
-			flog.Debugf("%v", b.Users)
+			channel.Users[nick] = status
+			flog.Debugf("Setting [%s].Users[%s]=%v", channelName, nick, status)
+			flog.Debugf("%v", channel.Users)
 		}
 	}
 }
