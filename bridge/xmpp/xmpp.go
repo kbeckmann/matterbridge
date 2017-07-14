@@ -5,9 +5,14 @@ import (
 	"github.com/42wim/matterbridge/bridge/config"
 	log "github.com/Sirupsen/logrus"
 	"github.com/mattn/go-xmpp"
+	"github.com/russross/blackfriday"
+	"github.com/microcosm-cc/bluemonday"
+
 
 	"strings"
+	"html"
 	"time"
+//	"encoding/xml"
 )
 
 type Bxmpp struct {
@@ -127,7 +132,34 @@ func (b *Bxmpp) Send(msg config.Message) error {
 	}
 	flog.Infof("6")
 
-	client.Send(xmpp.Chat{Type: "groupchat", Remote: msg.Channel + "@" + b.Config.Muc, Text: msg.Text})
+	rawText := strings.TrimSpace(msg.Text)
+
+	borkedURLPrefix := "http://localhost:8065/"
+	correctURLPrefix := "https://mattermost.xil.se/"
+	rawText = strings.Replace(rawText, borkedURLPrefix, correctURLPrefix, 1)
+
+	markdownBytes := blackfriday.MarkdownCommon([]byte(rawText))
+	markdown := strings.TrimSpace(string(markdownBytes))
+	flog.Infof("MARKDOWN: [%s]", markdown)
+
+
+	if strings.HasPrefix(markdown, "<p>") && strings.HasSuffix(markdown, "</p>") {
+		flog.Infof("starts with <p>..")
+		
+		if html.UnescapeString(markdown[3:len(markdown)-4]) == rawText {
+			// No markdown in the text!
+			flog.Infof("No markdown! woop!")
+			chat := xmpp.Chat{Type: "groupchat", Remote: msg.Channel + "@" + b.Config.Muc, Text: rawText}
+			client.Send(chat)
+			return nil
+		}
+	}
+	
+	// HTML
+	sanitizedBytes := bluemonday.UGCPolicy().SanitizeBytes(markdownBytes)
+	sanitized := strings.TrimSpace(string(sanitizedBytes))
+	chat := xmpp.Chat{Type: "groupchat", Remote: msg.Channel + "@" + b.Config.Muc, Text: sanitized}
+	client.SendHtml(chat)
 	return nil
 }
 
@@ -186,6 +218,7 @@ func (b *Bxmpp) handleXmpp() error {
 		switch v := m.(type) {
 		case xmpp.Chat:
 			var channel, nick string
+			flog.Debugf("RECEIVE: %#v", v)
 			if v.Type == "groupchat" {
 				s := strings.Split(v.Remote, "@")
 				if len(s) >= 2 {
