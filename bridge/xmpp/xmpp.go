@@ -117,6 +117,8 @@ func (b *Bxmpp) Send(msg config.Message) error {
 		// Ensure that the MUC is joined
 		flog.Infof("BONUS JOIN!!! %s", msg.Channel)
 		client.JoinMUCNoHistory(msg.Channel+"@"+b.Config.Muc, xmppUser)
+		channel.MMToXmpp[mmUser] = xmppUser
+		channel.XmppToMM[xmppUser] = mmUser
 	}
 
 	flog.Infof("1")
